@@ -32,7 +32,10 @@ def logisticRegression(X, y, verbose=False):
             H += numpy.outer(x1, x1) * sig * (1.0 - sig)
 
         delta_b = -numpy.linalg.solve(H, g)
-        if numpy.linalg.norm(delta_b) < 1e-8:
+        err = numpy.linalg.norm(delta_b)
+        if verbose:
+            print(f"err is {err}")
+        if err < 1e-8:
             break
         b0 += delta_b
 
