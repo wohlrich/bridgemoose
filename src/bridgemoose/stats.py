@@ -43,7 +43,7 @@ class Statistic:
         return "%.2f +/- %.2f" % (self.mean, self.std_error())
         
 def dd_compare_strategies(deal_generator, strategy1, strategy2,
-    score_type="IMPS", vulnerability=None, bucketer=None):
+    score_type="imps", vulnerability=None, bucketer=None):
     """\
 Returns a triple; a Statistic and two collections.Counter objects.
 The Statistic returns the score from the NS point of view of strategy1
@@ -52,7 +52,7 @@ vs. strategy2.  The Counters are essentially dicts mapping ("<contract-declarer>
 A "strategy" can be either a contract-declarer string ("3NT-W") or a
 function which takes a Deal and returns a contract-declarer.
 
-"Scoring" can be 'IMPS', 'matchpoints', 'TOTAL'.
+"Scoring" can be 'imps', 'matchpoints', 'TOTAL'.
 
 "vulnerability" can be None, "", "NS", "EW", "BOTH", "NSEW"
 
@@ -69,14 +69,15 @@ are triples as described above.
     else:
         raise ValueError("Vulnerability should be '', 'NS', 'EW', or 'NSEW'")
 
-    if score_type.upper() in ('IMPS', 'IMP'):
+    score_type = score_type.lower()
+    if score_type in ('imps', 'imp'):
         score_func = scoring.scorediff_imps
-    elif score_type.upper() in ('MPS', 'MP', 'MATCHPOINTS'):
+    elif score_type in ('mps', 'mp', 'matchpoints'):
         score_func = scoring.scorediff_matchpoints
-    elif score_type.upper() in ('TOTAL'):
+    elif score_type in ('total'):
         score_func = lambda x: x
     else:
-        raise ValueError("Scoring should be one of 'IMPS','matchpoints','TOTAL'")
+        raise ValueError("Scoring should be one of 'imps','matchpoints','total'")
 
     sign = {"N":1, "S":1, "E":-1, "W":-1}
 
@@ -173,12 +174,18 @@ class ReportingTimer:
 
         
 class DDComparison:
-    def __init__(self, contracts1, scores1, contracts2, scores2, score_type):
+    def __init__(self, contracts1, scores1, contracts2, scores2, score_type,
+                 strat_names=None):
         self.contracts1 = contracts1
         self.scores1 = scores1
         self.contracts2 = contracts2
         self.scores2 = scores2
-        self.score_type = score_type
+        self.score_type = score_type.lower()
+        if strat_names is None:
+            self.strat_names = ["Strat 1", "Strat 2"]
+        else:
+            self.strat_names = [f"Strat {i+1}" if x is None else x
+                                for i, x in enumerate(strat_names)]
 
     def contract_counter(self, index):
         return Counter([self.contracts1, self.contracts2][index])
@@ -189,16 +196,18 @@ class DDComparison:
     def advantage_1(self, score_type=None):
         if score_type is None:
             score_type = self.score_type
+        else:
+            score_type = score_type.lower()
 
         scorers = {
-            "IMPS": scoring.scorediff_imps,
-            "IMP": scoring.scorediff_imps,
-            "MPS": scoring.scorediff_matchpoints,
-            "MP": scoring.scorediff_matchpoints,
-            "MATCHPOINTS": scoring.scorediff_matchpoints,
-            "TOTAL": lambda x: x,
+            "imps": scoring.scorediff_imps,
+            "imp": scoring.scorediff_imps,
+            "mps": scoring.scorediff_matchpoints,
+            "mp": scoring.scorediff_matchpoints,
+            "matchpoints": scoring.scorediff_matchpoints,
+            "total": lambda x: x,
         }
-        score_func = scorers[score_type.upper()]
+        score_func = scorers[score_type]
 
         stat = Statistic()
 
@@ -207,10 +216,35 @@ class DDComparison:
 
         return stat
 
+    def display(self, method="full"):
+        if method not in ["full","short"]:
+            raise ValueError("method should be 'full' or 'short'")
+
+        stat = self.advantage_1()
+
+        scale = {"matchpoints":100, "imps":1, "total":1}[self.score_type]
+        sum_means = {"matchpoints":1, "imps":0, "total":0}[self.score_type]
+        print(f"Advantage for {self.strat_names[0]}: {scale*stat.mean:5.2f} +/- {scale*stat.std_error():5.2f}{'':10} {self.strat_names[1]}: {scale*(sum_means-stat.mean):5.2f}")
+
+        if method == "short":
+            return
+
+        for index in range(2):
+            cc = [(num, con) for con, num in self.contract_counter(index).items()]
+            print()
+            print(f"Contracts for {self.strat_names[index]}")
+            for val, con in sorted(cc):
+                print(f"{str(con):8} {val:8}")
+            print()
+            print(f"Scores for Strat {self.strat_names[index]}")
+            sc = sorted(list(self.score_counter(index).items()), reverse=True)
+            for score, num in sc:
+                print(f"{score:8} {num:8}")
+
 
 class DDAnalyzer:
     def __init__(self, count, west=None, north=None, east=None, south=None,
-        accept=None, rng=None, score_type="IMPS", vulnerability=None):
+        accept=None, rng=None, score_type="imps", vulnerability=None):
         #
         self.count = count
         self.gen = random.RestrictedDealer(west, north, east, south, accept, rng)
@@ -246,7 +280,17 @@ class DDAnalyzer:
         else:
             return [None if ignore_func and ignore_func(deal) else auction.DeclaredContract(strategy) for deal in self.deals]
 
-    def compare_strategies(self, strategy1, strategy2, score_type=None,
+    @staticmethod
+    def _strategy_name(strategy):
+        if callable(strategy):
+            if strategy.__name__ == "<lambda>":
+                return None
+            else:
+                return strategy.__name__
+        else:
+            return str(strategy)
+
+    def compare(self, strategy1, strategy2, score_type=None,
         vulnerability=None, ignore_func=None):
         #
         contracts1 = self._get_contracts(strategy1, ignore_func)
@@ -268,8 +312,15 @@ class DDAnalyzer:
         scores1 = self._score_up(contracts1, vul_set)
         scores2 = self._score_up(contracts2, vul_set)
 
+        strat_names = [
+            self._strategy_name(strategy1),
+            self._strategy_name(strategy2),
+        ]
+
         return DDComparison(contracts1, scores1, contracts2, scores2,
-            self.score_type if score_type is None else score_type)
+            self.score_type if score_type is None else score_type,
+                            strat_names=strat_names)
+    compare_strategies = compare
 
     def _score_up(self, contracts, vul_set):
         sign = {
